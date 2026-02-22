@@ -107,7 +107,7 @@ See `.env.example`. Key variables:
 
 ## Deployment
 
-- **Docker:** Multi-stage Dockerfile (Python 3.11-slim). Non-root user (`appuser`, UID 1001). Health check on `/api/stats`.
+- **Docker:** Multi-stage Dockerfile (Python 3.12-slim): builder → development → production. Uses `/opt/venv` virtual environment pattern for non-root user (`appuser`, UID 1001) compatibility. Production stage runs with `--skip-index` (uses pre-built DB). Health check on `/health`. Also available via top-level `docker-compose.yml` as `n8n-workflows` service (host port 8000).
 - **Kubernetes:** Manifests in `k8s/` — 2 replicas, resource limits (512Mi/500m), persistent volumes for DB and logs.
 - **Helm:** Chart in `helm/workflows-docs/`.
 - **Direct:** `pip install -r requirements.txt && python run.py`
