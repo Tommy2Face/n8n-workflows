@@ -61,3 +61,7 @@ EXPOSE 8000
 
 # Security: Run with minimal privileges
 CMD ["python", "-u", "run.py", "--host", "0.0.0.0", "--port", "8000"]
+
+# Development stage — same as base but referenced by docker-compose.dev.yml
+FROM base AS development
+CMD ["python", "-u", "run.py", "--host", "0.0.0.0", "--port", "8000", "--dev"]
