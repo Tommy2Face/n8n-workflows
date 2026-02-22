@@ -1,231 +1,118 @@
+# CLAUDE.md
 
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-# n8n-workflows Repository
+## Project Overview
 
-#
+n8n workflow search engine — indexes 2,000+ n8n workflow JSON exports and serves them via a FastAPI web UI with full-text search. Sub-100ms response times, ~50MB memory. Forked from [Zie619/n8n-workflows](https://github.com/Zie619/n8n-workflows).
 
-# Overview
-This repository contains a collection of n8n workflow automation files. n8n is a workflow automation tool that allows creating complex automations through a visual node-based interface. Each workflow is stored as a JSON file containing node definitions, connections, and configurations.
+## Commands
 
-#
+```bash
+# Run locally (uses Python 3.12 venv — Python 3.14 cannot build pydantic-core)
+.venv/bin/python run.py                    # Start server (127.0.0.1:8000)
+.venv/bin/python run.py --dev              # Dev mode with auto-reload
+.venv/bin/python run.py --host 0.0.0.0     # Accept external connections
+.venv/bin/python run.py --port 3000        # Custom port
+.venv/bin/python run.py --reindex          # Force database reindex
+.venv/bin/python run.py --skip-index       # Skip indexing (CI mode)
 
-# Repository Structure
-```text
+# Docker
+docker compose up -d                       # Production
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d  # Dev (hot-reload)
 
-text
+# Tests
+python test_workflows.py                   # Validate workflow JSON structure
+bash test_api.sh                           # API endpoint tests
+bash test_security.sh                      # Security tests
 
-text
-n8n-workflows/
-├── workflows/           
+# AI Stack (separate Docker Compose in ai-stack/)
+cd ai-stack && ./start.sh                  # n8n + Agent Zero + ComfyUI
+```
 
-# Main directory containing all n8n workflow JSON files
-│   ├── *.json          
+## Architecture
 
-# Individual workflow files
-├── README.md           
+### Core: Three-File Server
 
-# Repository documentation
-├── claude.md           
+```
+run.py          → Entry point: dependency check, directory setup, DB init, uvicorn launch
+api_server.py   → FastAPI app: 7 API endpoints, rate limiting, CORS, security middleware
+workflow_db.py  → WorkflowDatabase class: SQLite FTS5 indexing, search, metadata extraction
+```
 
-# This file
+### Request Flow
 
- - AI assistant context
-└── [other files]       
+Browser → `static/index.html` → FastAPI (`api_server.py`) → `WorkflowDatabase` (`workflow_db.py`) → SQLite (`database/workflows.db`)
 
-# Additional configuration or documentation files
-```text
+### API Endpoints
 
-text
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /` | Serve web UI |
+| `GET /api/workflows` | Search with FTS5 (params: `q`, `trigger`, `complexity`, `active_only`, `page`, `per_page`) |
+| `GET /api/stats` | Database statistics |
+| `GET /api/categories` | List all categories |
+| `GET /api/workflow/{id}` | Get workflow JSON |
+| `GET /api/export` | Export workflows |
+| `POST /api/reindex` | Reindex database (requires `admin_token` param) |
+| `GET /health` | Health check |
 
-text
+### WorkflowDatabase (`workflow_db.py`)
 
-#
+The core of the system. Key details:
 
-# Workflow File Format
-Each workflow JSON file contains:
+- **Schema:** `workflows` table with filename, name, trigger_type, complexity (low/medium/high), node_count, integrations (JSON), tags (JSON), file_hash (MD5 for change detection)
+- **FTS5 virtual table:** full-text search on filename, name, description, integrations, tags
+- **`analyze_workflow_file()`** — parses workflow JSON, extracts metadata, detects trigger types and integrations from node types
+- **`index_all_workflows()`** — scans `workflows/` directory, indexes new/changed files (MD5 hash comparison), skips unchanged
+- **100+ integration mappings** — maps n8n node types to service names (e.g., `n8n-nodes-base.telegram` → `Telegram`)
+- **WAL mode** enabled for concurrent read performance
 
-- **name**: Workflow identifier
+### Security (`api_server.py`)
 
-- **nodes**: Array of node objects defining operations
+- **Rate limiting:** 60 req/min per IP (in-memory, `rate_limit_storage` defaultdict)
+- **Path traversal prevention:** `validate_filename()` blocks `..`, URL-encoded variants, shell chars; regex whitelist `^[a-zA-Z0-9_\-]+\.json$`
+- **CORS:** restricted to specific origins (localhost + GitHub Pages + Render deployment)
+- **Reindex protection:** requires `ADMIN_TOKEN` env var
 
-- **connections**: Object defining how nodes are connected
+### Optional Modules (`src/`)
 
-- **settings**: Workflow-level configuration
+Extended features not loaded by default — these are independent modules:
 
-- **staticData**: Persistent data across executions
+| Module | Purpose |
+|--------|---------|
+| `ai_assistant.py` | NLP intent detection, intelligent keyword extraction for search |
+| `user_management.py` | JWT auth, bcrypt password hashing, role-based access |
+| `performance_monitor.py` | WebSocket dashboard, CPU/memory/disk metrics, alerts |
+| `analytics_engine.py` | Workflow trends, patterns, category distribution |
+| `community_features.py` | Ratings (1-5), reviews, helpful votes |
+| `enhanced_api.py` | Advanced search, recommendations, aggregation |
+| `integration_hub.py` | Webhook management, GitHub sync, API connectors |
 
-- **tags**: Categorization tags
+Legacy Node.js files (`src/database.js`, `src/server.js`, etc.) are from the original upstream — the Python stack has replaced them.
 
-- **createdAt/updatedAt**: Timestamps
+## Environment Variables
 
-#
+See `.env.example`. Key variables:
 
-# Common Node Types
-
-- **Trigger Nodes**: webhook, cron, manual
-
-- **Integration Nodes**: HTTP Request, database connectors, API integrations
-
-- **Logic Nodes**: IF, Switch, Merge, Loop
-
-- **Data Nodes**: Function, Set, Transform Data
-
-- **Communication**: Email, Slack, Discord, etc.
-
-#
-
-# Working with This Repository
-
-#
-
-#
-
-# For Analysis Tasks
-When analyzing workflows in this repository:
-
-1. Parse JSON files to understand workflow structure
-
-2. Examine node chains to determine functionality
-
-3. Identify external integrations and dependencies
-
-4. Consider the business logic implemented by node connections
-
-#
-
-#
-
-# For Documentation Tasks
-When documenting workflows:
-
-1. Verify existing descriptions against actual implementation
-
-2. Identify trigger mechanisms and schedules
-
-3. List all external services and APIs used
-
-4. Note data transformations and business logic
-
-5. Highlight any error handling or retry mechanisms
-
-#
-
-#
-
-# For Modification Tasks
-When modifying workflows:
-
-1. Preserve the JSON structure and required fields
-
-2. Maintain node ID uniqueness
-
-3. Update connections when adding/removing nodes
-
-4. Test compatibility with n8n version requirements
-
-#
-
-# Key Considerations
-
-#
-
-#
-
-# Security
-
-- Workflow files may contain sensitive information in webhook URLs or API configurations
-
-- Credentials are typically stored separately in n8n, not in the workflow files
-
-- Be cautious with any hardcoded values or endpoints
-
-#
-
-#
-
-# Best Practices
-
-- Workflows should have clear, descriptive names
-
-- Complex workflows benefit from documentation nodes or comments
-
-- Error handling nodes improve reliability
-
-- Modular workflows (calling sub-workflows) improve maintainability
-
-#
-
-#
-
-# Common Patterns
-
-- **Data Pipeline**: Trigger → Fetch Data → Transform → Store/Send
-
-- **Integration Sync**: Cron → API Call → Compare → Update Systems
-
-- **Automation**: Webhook → Process → Conditional Logic → Actions
-
-- **Monitoring**: Schedule → Check Status → Alert if Issues
-
-#
-
-# Helpful Context for AI Assistants
-
-When assisting with this repository:
-
-1. **Workflow Analysis**: Focus on understanding the business purpose by examining the node flow, not just individual nodes.
-
-2. **Documentation Generation**: Create descriptions that explain what the workflow accomplishes, not just what nodes it contains.
-
-3. **Troubleshooting**: Common issues include:
-
-   - Incorrect node connections
-
-   - Missing error handling
-
-   - Inefficient data processing in loops
-
-   - Hardcoded values that should be parameters
-
-4. **Optimization Suggestions**:
-
-   - Identify redundant operations
-
-   - Suggest batch processing where applicable
-
-   - Recommend error handling additions
-
-   - Propose splitting complex workflows
-
-5. **Code Generation**: When creating tools to analyze these workflows:
-
-   - Handle various n8n format versions
-
-   - Account for custom nodes
-
-   - Parse expressions in node parameters
-
-   - Consider node execution order
-
-#
-
-# Repository-Specific Information
-[Add any specific information about your workflows, naming conventions, or special considerations here]
-
-#
-
-# Version Compatibility
-
-- n8n version: [Specify the n8n version these workflows are compatible with]
-
-- Last updated: [Date of last major update]
-
-- Migration notes: [Any version-specific considerations]
-
--
-
--
-
--
-
-[中文](./CLAUDE_ZH.md)
+| Variable | Purpose |
+|----------|---------|
+| `JWT_SECRET_KEY` | JWT signing key |
+| `ADMIN_PASSWORD` | Admin user password |
+| `ADMIN_TOKEN` | Token for `/api/reindex` endpoint |
+| `WORKFLOW_DB_PATH` | SQLite path (default: `database/workflows.db`) |
+| `HOST` | Bind address (default: `127.0.0.1`) |
+| `PORT` | Server port (default: `8000`) |
+| `ALLOWED_ORIGINS` | Comma-separated CORS origins |
+
+## Deployment
+
+- **Docker:** Multi-stage Dockerfile (Python 3.11-slim). Non-root user (`appuser`, UID 1001). Health check on `/api/stats`.
+- **Kubernetes:** Manifests in `k8s/` — 2 replicas, resource limits (512Mi/500m), persistent volumes for DB and logs.
+- **Helm:** Chart in `helm/workflows-docs/`.
+- **Direct:** `pip install -r requirements.txt && python run.py`
+
+## Parallel Projects
+
+- **`ai-stack/`** — Docker Compose stack: n8n (5678) + Agent Zero (50080) + ComfyUI (8188, needs NVIDIA GPU). Launch: `./start.sh`
+- **`medcards-ai/`** — Next.js 14 medical exam prep app (Supabase + Claude). Separate project, not related to workflow search.
