@@ -1,67 +1,96 @@
-# Use official Python runtime as base image - stable secure version
-FROM python:3.11-slim-bookworm AS base
+# syntax=docker/dockerfile:1.7
+# Multi-stage Dockerfile for n8n-workflows FastAPI application
 
-# Security: Set up non-root user first
-RUN groupadd -g 1001 appuser && \
-    useradd -m -u 1001 -g appuser appuser
-
-# Set environment variables for security and performance
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONHASHSEED=random \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_DEFAULT_TIMEOUT=100 \
-    PIP_ROOT_USER_ACTION=ignore \
-    DEBIAN_FRONTEND=noninteractive \
-    PYTHONIOENCODING=utf-8
-
-# Install security updates and build dependencies for ARM64
-RUN apt-get update && \
-    apt-get upgrade -y && \
-    apt-get install -y --no-install-recommends \
-    ca-certificates \
-    gcc \
-    python3-dev \
-    && apt-get autoremove -y \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* /root/.cache \
-    && update-ca-certificates
-
-# Create app directory with correct permissions
+# Stage 1: Builder (Python dependency resolution)
+FROM python:3.12-slim as builder
 WORKDIR /app
-RUN chown -R appuser:appuser /app
 
-# Copy requirements as root to ensure they're readable
-COPY --chown=appuser:appuser requirements.txt .
+# Install build essentials for wheel compilation
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies with security hardening
-# Use pip without pinning versions for better ARM64 compatibility
-RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    python -m pip install --no-cache-dir -r requirements.txt && \
-    find /usr/local -type f -name '*.pyc' -delete && \
-    find /usr/local -type d -name '__pycache__' -delete
+# Create virtual environment
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
-# Copy application code with correct ownership
-COPY --chown=appuser:appuser . .
+# Copy requirements and install
+COPY requirements.txt .
+RUN pip install --no-warn-script-location --no-cache-dir -r requirements.txt
 
-# Create necessary directories with correct permissions
-RUN mkdir -p /app/database /app/workflows /app/static /app/src && \
+# Stage 2: Development (with hot-reload and debug tools)
+FROM python:3.12-slim as development
+WORKDIR /app
+
+# Install runtime dependencies only
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    sqlite3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy Python packages from builder
+COPY --from=builder /opt/venv /opt/venv
+
+ENV PATH="/opt/venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    WORKFLOW_DB_PATH=/app/database/workflows.db
+
+# Copy application source
+COPY . .
+
+# Create non-root user
+RUN useradd -m -u 1001 appuser && \
     chown -R appuser:appuser /app
 
-# Security: Switch to non-root user
 USER appuser
 
-# Healthcheck
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8000/api/stats')" || exit 1
-
-# Expose port (informational)
 EXPOSE 8000
 
-# Security: Run with minimal privileges
-CMD ["python", "-u", "run.py", "--host", "0.0.0.0", "--port", "8000"]
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD curl -f http://127.0.0.1:8000/health || exit 1
 
-# Development stage — same as base but referenced by docker-compose.dev.yml
-FROM base AS development
-CMD ["python", "-u", "run.py", "--host", "0.0.0.0", "--port", "8000", "--dev"]
+CMD ["python", "run.py", "--host", "0.0.0.0", "--port", "8000", "--dev"]
+
+# Stage 3: Production (optimized runtime)
+FROM python:3.12-slim as production
+WORKDIR /app
+
+# Install only runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    sqlite3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy venv from builder
+COPY --from=builder /opt/venv /opt/venv
+
+# Set PATH and environment variables
+ENV PATH="/opt/venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    WORKFLOW_DB_PATH=/app/database/workflows.db \
+    CI=true
+
+# Copy application source (minimal)
+COPY run.py run.py
+COPY api_server.py api_server.py
+COPY workflow_db.py workflow_db.py
+COPY requirements.txt requirements.txt
+COPY static/ static/
+COPY workflows/ workflows/
+
+# Create database directory and non-root user
+RUN mkdir -p database && \
+    useradd -m -u 1001 appuser && \
+    chown -R appuser:appuser /app
+
+USER appuser
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD curl -f http://127.0.0.1:8000/health || exit 1
+
+CMD ["python", "run.py", "--host", "0.0.0.0", "--port", "8000", "--skip-index"]
