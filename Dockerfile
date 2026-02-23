@@ -17,7 +17,8 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy requirements and install
 COPY requirements.txt .
-RUN pip install --no-warn-script-location --no-cache-dir -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-warn-script-location -r requirements.txt
 
 # Stage 2: Development (with hot-reload and debug tools)
 FROM python:3.12-slim as development
@@ -57,6 +58,11 @@ CMD ["python", "run.py", "--host", "0.0.0.0", "--port", "8000", "--dev"]
 FROM python:3.12-slim as production
 WORKDIR /app
 
+LABEL org.opencontainers.image.title="n8n-workflows" \
+      org.opencontainers.image.description="N8N Workflows FastAPI search engine" \
+      org.opencontainers.image.version="1.0" \
+      org.opencontainers.image.vendor="Production"
+
 # Install only runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
@@ -70,6 +76,7 @@ COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONOPTIMIZE=2 \
     WORKFLOW_DB_PATH=/app/database/workflows.db \
     CI=true
 
